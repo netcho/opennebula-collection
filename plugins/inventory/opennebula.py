@@ -1,9 +1,11 @@
+import collections
 import logging
 
 from enum import Enum
 
 from ansible.errors import AnsibleError, AnsibleOptionsError, AnsibleRuntimeError
 from ansible.plugins.inventory import BaseInventoryPlugin, Constructable, Cacheable
+from ansible.module_utils.common.text.converters import to_text
 from ansible.utils.display import Display
 
 ANSIBLE_METADATA = {
@@ -61,6 +63,7 @@ HAS_PYONE_MODULE = False
 
 try:
     import pyone
+
     HAS_PYONE_MODULE = True
 except ImportError:
     HAS_PYONE_MODULE = False
@@ -80,10 +83,20 @@ class State(Enum):
     cloning_failure = 11
 
 
+def one_dict_to_lowercase(one_dict):
+    result = {}
+
+    for key in one_dict.keys():
+        if len(one_dict[key]) and "#text" not in key:
+            result[key.lower()] = to_text(one_dict[key])
+
+    return result
+
+
 class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
     """Host Inventory provider for ansible using OpenNebula"""
 
-    NAME = 'netcho.opennebula.opennebula'
+    NAME = "netcho.opennebula.opennebula"
 
     def _get_vmpool(self):
         try:
@@ -97,11 +110,12 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
         vm_dict = {
             "id": vm.ID,
-            "name": vm.NAME,
+            "name": to_text(vm.NAME),
             "state": vm_state.name,
             "lcm_state": str(vm_lcm_state.name).lower(),
             "deploy_id": vm.DEPLOY_ID,
             "start_timestamp": vm.STIME,
+            "nic": []
         }
 
         if hasattr(vm, "TEMPLATE"):
@@ -109,17 +123,24 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 try:
                     vm_dict["template_id"] = int(vm.TEMPLATE["TEMPLATE_ID"])
                     vm_template = self.server.template.info(vm_dict["template_id"])
-                    vm_dict["template"] = vm_template.NAME
+                    vm_dict["template"] = to_text(vm_template.NAME)
                 except pyone.OneException as e:
                     raise AnsibleRuntimeError(e.message)
 
-        if hasattr(vm, "USER_TEMPLATE"):
-            attributes = {}
-            for key in vm.USER_TEMPLATE.keys():
-                if len(vm.USER_TEMPLATE[key]) and "#text" not in vm.USER_TEMPLATE[key]:
-                    attributes[key.lower()] = vm.USER_TEMPLATE[key]
+            if "NIC" in vm.TEMPLATE:
+                vm_nic = []
 
-            vm_dict["user_attributes"] = attributes
+                if isinstance(vm.TEMPLATE["NIC"], collections.OrderedDict):
+                    vm_nic.append(vm.TEMPLATE["NIC"])
+                elif isinstance(vm.TEMPLATE["NIC"], list):
+                    vm_nic = vm.TEMPLATE["NIC"]
+
+                for nic in vm_nic:
+                    if isinstance(nic, collections.OrderedDict):
+                        vm_dict["nic"].append(one_dict_to_lowercase(nic))
+
+        if hasattr(vm, "USER_TEMPLATE"):
+            vm_dict["user_attributes"] = one_dict_to_lowercase(vm.USER_TEMPLATE)
 
         return vm_dict
 
@@ -128,20 +149,22 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
     def _get_hostname(self, vm):
         if not len(vm["nic"]):
-            display.vvvv("VM {0} doesn't have any NICs attached to it, VM name will be used as hostname".format(vm["name"]))
+            display.vvvv(
+                f"VM {vm['name']} doesn't have any NICs attached to it, VM name will be used as hostname")
             return vm["name"]
 
         hostname_preference = self.get_option("one_hostname_preference")
         if not hostname_preference:
-            raise AnsibleOptionsError("Invalid value for option one_hostname_preference: {0}".format(hostname_preference))
+            raise AnsibleOptionsError(
+                f"Invalid value for option one_hostname_preference: {hostname_preference}")
 
         if hostname_preference == "fqdn":
             vm_virtual_network = self.server.vn.info(int(vm["nic"][0]["network_id"]))
 
             if "DOMAIN" in vm_virtual_network.TEMPLATE:
-                return vm["name"] + "." + vm_virtual_network.TEMPLATE["DOMAIN"][:-1]
+                return to_text(vm["name"] + "." + vm_virtual_network.TEMPLATE["DOMAIN"][:-1])
             else:
-                display.vvvv("VM {0} network {1} doesn't have a domain configured, using VM name".format(vm["name"], vm_virtual_network.TEMPLATE["NAME"]))
+                display.vvvv(f"VM {vm['name']} first NIC doesn't have a domain configured, using VM name")
                 return vm["name"]
         elif hostname_preference == "name":
             return vm["name"]
@@ -159,13 +182,13 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             self._set_composite_vars(self.get_option('compose'), host, hostname, strict=strict)
             self._add_host_to_composed_groups(self.get_option('groups'), host, hostname, strict=strict)
             self._add_host_to_keyed_groups(self.get_option('keyed_groups'), host, hostname, strict=strict)
-    
+
     def verify_file(self, path):
         if super(InventoryModule, self).verify_file(path):
             if path.endswith(("one.yaml", "one.yml")):
                 return True
         return False
-    
+
     def parse(self, inventory, loader, path, cache=True):
         if not HAS_PYONE_MODULE:
             raise AnsibleError("OpenNebula inventory plugin requires pyone module to be installed")
