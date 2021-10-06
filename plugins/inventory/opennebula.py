@@ -93,6 +93,15 @@ def one_dict_to_lowercase(one_dict):
     return result
 
 
+def get_domain_name_for_network(server, network_id):
+    vm_virtual_network = server.vn.info(int(network_id))
+
+    if "DOMAIN" in vm_virtual_network.TEMPLATE:
+        return vm_virtual_network.TEMPLATE["DOMAIN"][:-1]
+    else:
+        return None
+
+
 class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
     """Host Inventory provider for ansible using OpenNebula"""
 
@@ -115,7 +124,8 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             "lcm_state": str(vm_lcm_state.name).lower(),
             "deploy_id": vm.DEPLOY_ID,
             "start_timestamp": vm.STIME,
-            "nic": []
+            "nic": [],
+            "network_id_domain_map": {}
         }
 
         if hasattr(vm, "TEMPLATE"):
@@ -139,6 +149,11 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                     if isinstance(nic, collections.OrderedDict):
                         vm_dict["nic"].append(one_dict_to_lowercase(nic))
 
+                        network_domain_name = get_domain_name_for_network(self.server, nic["NETWORK_ID"])
+
+                        if network_domain_name is not None:
+                            vm_dict["network_id_domain_map"][nic["NETWORK_ID"]] = network_domain_name
+
         if hasattr(vm, "USER_TEMPLATE"):
             vm_dict["user_attributes"] = one_dict_to_lowercase(vm.USER_TEMPLATE)
 
@@ -159,10 +174,10 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 f"Invalid value for option one_hostname_preference: {hostname_preference}")
 
         if hostname_preference == "fqdn":
-            vm_virtual_network = self.server.vn.info(int(vm["nic"][0]["network_id"]))
+            domain = get_domain_name_for_network(self.server, vm["nic"][0]["network_id"])
 
-            if "DOMAIN" in vm_virtual_network.TEMPLATE:
-                return to_text(vm["name"] + "." + vm_virtual_network.TEMPLATE["DOMAIN"][:-1])
+            if domain is not None:
+                return to_text(vm["name"] + "." + domain)
             else:
                 display.vvvv(f"VM {vm['name']} first NIC doesn't have a domain configured, using VM name")
                 return vm["name"]
