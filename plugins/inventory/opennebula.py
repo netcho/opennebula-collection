@@ -135,6 +135,8 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                     vm_dict["template_id"] = int(vm.TEMPLATE["TEMPLATE_ID"])
                     vm_template = self.server.template.info(vm_dict["template_id"])
                     vm_dict["template"] = to_text(vm_template.NAME)
+                except pyone.OneNoExistsException:
+                    display.vv(f"VM {vm['name']} doesn't have a template associated with it.")
                 except pyone.OneException as e:
                     raise AnsibleRuntimeError(e.message)
 
