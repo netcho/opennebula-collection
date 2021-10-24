@@ -87,8 +87,9 @@ def one_dict_to_lowercase(one_dict):
     result = {}
 
     for key in one_dict.keys():
-        if len(one_dict[key]) and "#text" not in key:
-            result[key.lower()] = to_text(one_dict[key])
+        value = one_dict[key] 
+        if isinstance(value, str) and "#text" not in key:
+            result[key.lower()] = to_text(value)
 
     return result
 
