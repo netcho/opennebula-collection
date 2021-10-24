@@ -150,10 +150,11 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                     if isinstance(nic, collections.OrderedDict):
                         vm_dict["nic"].append(one_dict_to_lowercase(nic))
 
-                        network_domain_name = get_domain_name_for_network(self.server, nic["NETWORK_ID"])
+                        if isinstance(nic["NETWORK_ID"], str) and len(nic["NETWORK_ID"]):
+                            network_domain_name = get_domain_name_for_network(self.server, nic["NETWORK_ID"])
 
-                        if network_domain_name is not None:
-                            vm_dict["network_id_domain_map"][nic["NETWORK_ID"]] = network_domain_name
+                            if network_domain_name is not None:
+                                vm_dict["network_id_domain_map"][nic["NETWORK_ID"]] = network_domain_name
 
         if hasattr(vm, "USER_TEMPLATE"):
             vm_dict["user_attributes"] = one_dict_to_lowercase(vm.USER_TEMPLATE)
@@ -175,12 +176,15 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 f"Invalid value for option one_hostname_preference: {hostname_preference}")
 
         if hostname_preference == "fqdn":
-            domain = get_domain_name_for_network(self.server, vm["nic"][0]["network_id"])
+            if isinstance(vm["nic"][0]["network_id"], str) and len(vm["nic"][0]["network_id"]):
+                domain = get_domain_name_for_network(self.server, vm["nic"][0]["network_id"])
 
-            if domain is not None:
-                return to_text(vm["name"] + "." + domain)
+                if domain is not None:
+                    return to_text(vm["name"] + "." + domain)
+                else:
+                    display.vvvv(f"VM {vm['name']} first NIC doesn't have a domain configured, using VM name")
+                    return vm["name"]
             else:
-                display.vvvv(f"VM {vm['name']} first NIC doesn't have a domain configured, using VM name")
                 return vm["name"]
         elif hostname_preference == "name":
             return vm["name"]
