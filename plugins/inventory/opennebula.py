@@ -26,14 +26,14 @@ options:
   one_url:
     type: string
     description: OpenNebula RPC endpoint URL
-    required: True
+    required: False
     default: http://localhost:2633/RPC2
     env:
       - name: ONE_URL
   one_username:
     type: string
     description: OpenNebula username to authenticate with
-    required: True
+    required: False
     default: oneadmin
     env:
       - name: ONE_USERNAME
@@ -51,6 +51,12 @@ options:
       - fqdn
       - name
     default: fqdn
+  one_user_attributes_filter:
+    type: list
+    elements: string
+    description: User attribute fields that must be present
+    required: False
+    default: []
 extends_documentation_fragment:
   - inventory_cache
   - constructed   
@@ -126,7 +132,8 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             "deploy_id": vm.DEPLOY_ID,
             "start_timestamp": vm.STIME,
             "nic": [],
-            "network_id_domain_map": {}
+            "network_id_domain_map": {},
+            "user_attributes": {}
         }
 
         if hasattr(vm, "TEMPLATE"):
@@ -136,7 +143,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                     vm_template = self.server.template.info(vm_dict["template_id"])
                     vm_dict["template"] = to_text(vm_template.NAME)
                 except pyone.OneNoExistsException:
-                    display.vv(f"VM {vm['name']} doesn't have a template associated with it.")
+                    display.vv(f"Virtual machine {vm_dict['name']} doesn't have a template associated with it.")
                 except pyone.OneException as e:
                     raise AnsibleRuntimeError(e.message)
 
@@ -164,7 +171,12 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         return vm_dict
 
     def _query(self):
-        return [self._get_dict_for_vm(vm) for vm in self._get_vmpool().VM]
+        vms = [self._get_dict_for_vm(vm) for vm in self._get_vmpool().VM]
+        
+        if len(self.get_option("one_user_attributes_filter")):
+            return [vm for vm in vms if set(self.get_option("one_user_attributes_filter")).issubset(vm["user_attributes"])]
+        else:
+            return vms
 
     def _get_hostname(self, vm):
         if not len(vm["nic"]):
