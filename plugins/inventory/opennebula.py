@@ -26,14 +26,14 @@ options:
   one_url:
     type: string
     description: OpenNebula RPC endpoint URL
-    required: False
+    required: True
     default: http://localhost:2633/RPC2
     env:
       - name: ONE_URL
   one_username:
     type: string
     description: OpenNebula username to authenticate with
-    required: False
+    required: True
     default: oneadmin
     env:
       - name: ONE_USERNAME
@@ -51,12 +51,6 @@ options:
       - fqdn
       - name
     default: fqdn
-  one_user_attributes_filter:
-    type: list
-    elements: string
-    description: User attribute fields that must be present
-    required: False
-    default: []
 extends_documentation_fragment:
   - inventory_cache
   - constructed   
@@ -93,9 +87,15 @@ def one_dict_to_lowercase(one_dict):
     result = {}
 
     for key in one_dict.keys():
-        value = one_dict[key] 
-        if isinstance(value, str) and "#text" not in key:
-            result[key.lower()] = to_text(value)
+        if key == "#text":
+            continue
+
+        value = one_dict[key]
+
+        if type(value) == str and len(one_dict[key]):
+            result[key.lower()] = to_text(one_dict[key])
+        elif type(value) == dict:
+            one_dict_to_lowercase(value)
 
     return result
 
@@ -121,49 +121,48 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             raise AnsibleRuntimeError(e.message)
 
     def _get_dict_for_vm(self, vm):
-        vm_state = State(vm.STATE)
-        vm_lcm_state = pyone.LCM_STATE(vm.LCM_STATE)
+        vm_state = State(vm.get_STATE())
+        vm_lcm_state = pyone.LCM_STATE(vm.get_LCM_STATE())
 
         vm_dict = {
-            "id": vm.ID,
-            "name": to_text(vm.NAME),
+            "id": vm.get_ID(),
+            "name": vm.get_NAME(),
             "state": vm_state.name,
             "lcm_state": str(vm_lcm_state.name).lower(),
-            "deploy_id": vm.DEPLOY_ID,
-            "start_timestamp": vm.STIME,
+            "deploy_id": vm.get_DEPLOY_ID(),
+            "start_timestamp": vm.get_STIME(),
             "nic": [],
-            "network_id_domain_map": {},
-            "user_attributes": {}
+            "network_id_domain_map": {}
         }
 
-        if hasattr(vm, "TEMPLATE"):
-            if "TEMPLATE_ID" in vm.TEMPLATE:
+        vm_template = vm.get_TEMPLATE()
+        if vm_template is not None:
+            if "TEMPLATE_ID" in vm_template:
+                vm_dict["template_id"] = int(vm_template["TEMPLATE_ID"])
                 try:
-                    vm_dict["template_id"] = int(vm.TEMPLATE["TEMPLATE_ID"])
-                    vm_template = self.server.template.info(vm_dict["template_id"])
-                    vm_dict["template"] = to_text(vm_template.NAME)
+                    template_info = self.server.template.info(vm_dict["template_id"])
+                    vm_dict["template"] = template_info.get_NAME()
                 except pyone.OneNoExistsException:
-                    display.vv(f"Virtual machine {vm_dict['name']} doesn't have a template associated with it.")
+                    display.vvv(f"VM {vm.get_NAME()} template ID {vm_template['TEMPLATE_ID']} doesn't not exist, not retrieving it")
+                    pass
                 except pyone.OneException as e:
-                    raise AnsibleRuntimeError(e.message)
+                    raise AnsibleRuntimeError(str(e))
 
-            if "NIC" in vm.TEMPLATE:
-                vm_nic = []
+            if "NIC" in vm_template:
+                vm_nics = []
 
-                if isinstance(vm.TEMPLATE["NIC"], collections.OrderedDict):
-                    vm_nic.append(vm.TEMPLATE["NIC"])
+                if isinstance(vm_template["NIC"], dict):
+                    vm_nics.append(vm_template["NIC"])
                 elif isinstance(vm.TEMPLATE["NIC"], list):
-                    vm_nic = vm.TEMPLATE["NIC"]
+                    vm_nics = vm_template["NIC"]
 
-                for nic in vm_nic:
-                    if isinstance(nic, collections.OrderedDict):
-                        vm_dict["nic"].append(one_dict_to_lowercase(nic))
+                for nic in vm_nics:
+                    vm_dict["nic"].append(one_dict_to_lowercase(nic))
 
-                        if isinstance(nic["NETWORK_ID"], str) and len(nic["NETWORK_ID"]):
-                            network_domain_name = get_domain_name_for_network(self.server, nic["NETWORK_ID"])
+                    network_domain_name = get_domain_name_for_network(self.server, nic["NETWORK_ID"])
 
-                            if network_domain_name is not None:
-                                vm_dict["network_id_domain_map"][nic["NETWORK_ID"]] = network_domain_name
+                    if network_domain_name is not None:
+                        vm_dict["network_id_domain_map"][nic["NETWORK_ID"]] = network_domain_name
 
         if hasattr(vm, "USER_TEMPLATE"):
             vm_dict["user_attributes"] = one_dict_to_lowercase(vm.USER_TEMPLATE)
@@ -171,12 +170,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         return vm_dict
 
     def _query(self):
-        vms = [self._get_dict_for_vm(vm) for vm in self._get_vmpool().VM]
-        
-        if len(self.get_option("one_user_attributes_filter")):
-            return [vm for vm in vms if set(self.get_option("one_user_attributes_filter")).issubset(vm["user_attributes"])]
-        else:
-            return vms
+        return [self._get_dict_for_vm(vm) for vm in self._get_vmpool().VM]
 
     def _get_hostname(self, vm):
         if not len(vm["nic"]):
@@ -190,15 +184,12 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 f"Invalid value for option one_hostname_preference: {hostname_preference}")
 
         if hostname_preference == "fqdn":
-            if isinstance(vm["nic"][0]["network_id"], str) and len(vm["nic"][0]["network_id"]):
-                domain = get_domain_name_for_network(self.server, vm["nic"][0]["network_id"])
+            domain = get_domain_name_for_network(self.server, vm["nic"][0]["network_id"])
 
-                if domain is not None:
-                    return to_text(vm["name"] + "." + domain)
-                else:
-                    display.vvvv(f"VM {vm['name']} first NIC doesn't have a domain configured, using VM name")
-                    return vm["name"]
+            if domain is not None:
+                return to_text(vm["name"] + "." + domain)
             else:
+                display.vvvv(f"VM {vm['name']} first NIC doesn't have a domain configured, using VM name")
                 return vm["name"]
         elif hostname_preference == "name":
             return vm["name"]
