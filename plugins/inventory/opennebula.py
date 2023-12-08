@@ -193,7 +193,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         for host in source_data:
             if not len(host["nic"]):
                 display.v(
-                   f"VM {vm['name']} doesn't have any NICs attached to it, skipping it.")
+                   f"VM {host['name']} doesn't have any NICs attached to it, skipping it.")
                 continue
 
             hostname = self._get_hostname(host)
