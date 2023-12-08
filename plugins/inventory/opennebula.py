@@ -191,7 +191,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
     def _populate_from_source(self, source_data):
         for host in source_data:
-            if not len(vm["nic"]):
+            if not len(host["nic"]):
                 display.v(
                    f"VM {vm['name']} doesn't have any NICs attached to it, skipping it.")
                 continue
