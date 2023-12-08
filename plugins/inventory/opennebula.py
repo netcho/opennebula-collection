@@ -173,11 +173,6 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         return [self._get_dict_for_vm(vm) for vm in self._get_vmpool().VM]
 
     def _get_hostname(self, vm):
-        if not len(vm["nic"]):
-            display.vvvv(
-                f"VM {vm['name']} doesn't have any NICs attached to it, VM name will be used as hostname")
-            return vm["name"]
-
         hostname_preference = self.get_option("one_hostname_preference")
         if not hostname_preference:
             raise AnsibleOptionsError(
@@ -196,6 +191,11 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
     def _populate_from_source(self, source_data):
         for host in source_data:
+            if not len(vm["nic"]):
+                display.v(
+                   f"VM {vm['name']} doesn't have any NICs attached to it, skipping it.")
+                continue
+
             hostname = self._get_hostname(host)
 
             self.inventory.add_host(hostname)
